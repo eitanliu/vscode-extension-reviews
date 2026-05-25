@@ -1,0 +1,77 @@
+{
+  "name": "extension-reviews",
+  "displayName": "Extension Reviews",
+  "description": "View ratings and reviews for VS Code extensions from the Marketplace",
+  "publisher": "local-dev",
+  "version": "0.0.3",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "extension-reviews-container",
+          "title": "Extension Reviews",
+          "icon": "media/reviews-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "extension-reviews-container": [
+        {
+          "type": "webview",
+          "id": "extensionReviews.sidebar",
+          "name": "Reviews"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "extensionReviews.runTest",
+        "title": "Extension Reviews: Run Test"
+      },
+      {
+        "command": "extensionReviews.showForExtension",
+        "title": "View Extension Reviews"
+      },
+      {
+        "command": "extensionReviews.debugSwitchToMarket",
+        "title": "Extension Reviews: Debug Switch to Market"
+      }
+    ],
+    "menus": {
+      "extension/context": [
+        {
+          "command": "extensionReviews.showForExtension",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Extension Reviews",
+      "properties": {
+        "extensionReviews.autoLoad": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically load reviews when opening an extension details page. Disabled by default — use the right-click menu 'View Extension Reviews' to load manually."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.9.1",
+    "typescript": "^5.3.0"
+  }
+}
