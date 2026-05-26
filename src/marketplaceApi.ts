@@ -112,6 +112,61 @@ export async function searchExtensions(
   return { extensions, total };
 }
 
+// 通过 extensionId（publisher.name）精确查找单个扩展
+export async function getExtensionById(extensionId: string): Promise<ExtensionInfo | undefined> {
+  const body = JSON.stringify({
+    filters: [
+      {
+        criteria: [
+          { filterType: 8, value: 'Microsoft.VisualStudio.Code' },
+          { filterType: 4, value: extensionId }, // filterType 4 = ExtensionId，精确匹配
+        ],
+        pageNumber: 1,
+        pageSize: 1,
+      },
+    ],
+    flags: 0x200 | 0x1,
+  });
+
+  const raw = await httpsPost(
+    '/_apis/public/gallery/extensionquery?api-version=7.1-preview.1',
+    body,
+    { Accept: 'application/json;api-version=7.1-preview.1' }
+  );
+
+  const json = JSON.parse(raw);
+  const exts: unknown[] = json?.results?.[0]?.extensions ?? [];
+  if (exts.length === 0) return undefined;
+
+  const e = exts[0] as Record<string, unknown>;
+  const publisher = e.publisher as Record<string, unknown>;
+  const stats: Record<string, number> = {};
+  ((e.statistics as unknown[]) ?? []).forEach((s: unknown) => {
+    const stat = s as Record<string, unknown>;
+    stats[stat.statisticName as string] = stat.value as number;
+  });
+  const versions = (e.versions as unknown[]) ?? [];
+  const latestVersion = versions[0] as Record<string, unknown> | undefined;
+  const iconFile = ((latestVersion?.files as unknown[]) ?? []).find((f: unknown) => {
+    const file = f as Record<string, unknown>;
+    return file.assetType === 'Microsoft.VisualStudio.Services.Icons.Default';
+  }) as Record<string, unknown> | undefined;
+
+  return {
+    extensionId: e.extensionId as string,
+    extensionName: e.extensionName as string,
+    displayName: e.displayName as string,
+    shortDescription: e.shortDescription as string,
+    publisher: publisher?.displayName as string,
+    publisherId: publisher?.publisherName as string,
+    version: latestVersion?.version as string ?? '',
+    installCount: Math.round(stats['install'] ?? 0),
+    averageRating: stats['averagerating'] ?? 0,
+    ratingCount: Math.round(stats['ratingcount'] ?? 0),
+    iconUrl: iconFile?.source as string | undefined,
+  };
+}
+
 export async function getExtensionReviews(
   publisher: string,
   extensionName: string,
@@ -145,6 +200,7 @@ export async function getExtensionReviews(
 
   return {
     reviews,
-    totalCount: (json.totalCount as number) ?? reviews.length,
+    totalCount: (json.totalReviewCount as number) ?? (json.totalCount as number) ?? reviews.length,
+    hasMoreReviews: (json.hasMoreReviews as boolean) ?? (reviews.length >= pageSize),
   };
 }

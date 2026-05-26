@@ -28,6 +28,7 @@ export interface Review {
 export interface ReviewsResult {
   reviews: Review[];
   totalCount: number;
+  hasMoreReviews: boolean;
 }
 
 export interface SearchResult {

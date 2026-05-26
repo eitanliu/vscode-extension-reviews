@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
-import { getExtensionReviews, searchExtensions } from './marketplaceApi';
+import { getExtensionReviews, getExtensionById, searchExtensions } from './marketplaceApi';
 import { ExtensionInfo } from './types';
+
 
 export class ReviewsSidebarProvider implements vscode.WebviewViewProvider {
   public static readonly viewId = 'extensionReviews.sidebar';
@@ -8,20 +9,69 @@ export class ReviewsSidebarProvider implements vscode.WebviewViewProvider {
   private _currentExt?: ExtensionInfo;
   private _currentPage = 1;
   private _pendingExt?: ExtensionInfo;
+  private _pendingExtensionId?: string; // 精确 extensionId，侧栏打开时加载
+  private _displayNameResolver?: (displayName: string) => string | undefined;
 
   get isVisible() { return !!this._view?.visible; }
   get currentExtensionId() { return this._currentExt ? `${this._currentExt.publisherId}.${this._currentExt.extensionName}` : undefined; }
   resetCurrentExt() { this._currentExt = undefined; }
+
+  setDisplayNameResolver(resolver: (displayName: string) => string | undefined) {
+    this._displayNameResolver = resolver;
+  }
+
+  // 精确 extensionId 路径：
+  // 1. Marketplace 有 → 完整 ExtensionInfo（包含评分）
+  // 2. Marketplace 无但已安装 → 从 packageJSON 获取显示信息（保留名称/描述/版本）
+  // 3. 都没有 → 最小 ExtensionInfo，仍可获取评论
+  async loadByExtensionId(extensionId: string) {
+    const dot = extensionId.indexOf('.');
+    if (dot === -1) return;
+    const publisherId = extensionId.slice(0, dot);
+    const extensionName = extensionId.slice(dot + 1);
+    try {
+      const ext = await getExtensionById(extensionId);
+      if (ext) {
+        await this.showExtension(ext);
+        return;
+      }
+      // Marketplace 找不到：查已安装插件 packageJSON 保留显示信息
+      const installed = vscode.extensions.all.find(
+        (e) => e.id.toLowerCase() === extensionId.toLowerCase()
+      );
+      const pkg = installed?.packageJSON as Record<string, unknown> | undefined;
+      await this.showExtension({
+        extensionId, extensionName,
+        displayName: String(pkg?.['displayName'] ?? extensionName),
+        shortDescription: String(pkg?.['description'] ?? ''),
+        publisher: String(pkg?.['publisher'] ?? publisherId),
+        publisherId,
+        version: String(pkg?.['version'] ?? ''),
+        installCount: 0, averageRating: 0, ratingCount: 0,
+      });
+    } catch { /* 静默失败 */ }
+  }
+
+  // 侧栏不可见时暂存 extensionId，打开时再加载
+  setPendingExtensionId(extensionId: string) {
+    this._pendingExtensionId = extensionId;
+  }
 
   resolveWebviewView(webviewView: vscode.WebviewView) {
     this._view = webviewView;
     webviewView.webview.options = { enableScripts: true };
     webviewView.webview.html = this._getHtml();
 
-    // 每次侧边栏重新变为可见时，检测当前 Tab（retainContextWhenHidden 下无需延迟）
+    // 每次侧边栏重新变为可见时，优先用精确 extensionId，否则检测当前 Tab
     webviewView.onDidChangeVisibility(() => {
       if (webviewView.visible) {
-        this._detectCurrentTab();
+        if (this._pendingExtensionId) {
+          const id = this._pendingExtensionId;
+          this._pendingExtensionId = undefined;
+          this.loadByExtensionId(id);
+        } else {
+          this._detectCurrentTab();
+        }
       }
     });
 
@@ -34,7 +84,11 @@ export class ReviewsSidebarProvider implements vscode.WebviewViewProvider {
       switch (msg.command) {
         case 'ready':
           // WebView JS 已就绪，立即处理积压请求或检测当前 Tab，无需固定延迟
-          if (this._pendingExt) {
+          if (this._pendingExtensionId) {
+            const id = this._pendingExtensionId;
+            this._pendingExtensionId = undefined;
+            this.loadByExtensionId(id);
+          } else if (this._pendingExt) {
             const ext = this._pendingExt;
             this._pendingExt = undefined;
             await this.showExtension(ext);
@@ -69,38 +123,29 @@ export class ReviewsSidebarProvider implements vscode.WebviewViewProvider {
     const activeTab = vscode.window.tabGroups.activeTabGroup?.activeTab;
     if (activeTab?.label.startsWith('Extension: ')) {
       const displayName = activeTab.label.slice('Extension: '.length);
-      // 重置当前扩展，确保重新打开侧边栏时同一插件也能刷新
       this._currentExt = undefined;
-      await this._loadByDisplayName(displayName);
+      await this.loadByDisplayName(displayName);
     }
   }
 
-  // 按 displayName 搜索并加载评论
+  // 按 displayName 加载评论（供搜索框选中结果使用）
   async loadByDisplayName(displayName: string) {
-    await this._loadByDisplayName(displayName);
-  }
-
-  private async _loadByDisplayName(displayName: string) {
-    try {
-      const installed = vscode.extensions.all.find(
-        (e) => (e.packageJSON as { displayName?: string })?.displayName === displayName
-      );
-      if (installed) {
-        const [publisher, ...rest] = installed.id.split('.');
-        const name = rest.join('.');
-        const result = await searchExtensions(name, 1, 5);
-        const matched = result.extensions.find(
-          (e) => e.publisherId.toLowerCase() === publisher.toLowerCase() &&
-                 e.extensionName.toLowerCase() === name.toLowerCase()
-        );
-        if (matched) { await this.showExtension(matched); return; }
-      }
-      const result = await searchExtensions(displayName, 1, 5);
-      const matched = result.extensions.find(
-        (e) => e.displayName.toLowerCase() === displayName.toLowerCase()
-      ) ?? result.extensions[0];
-      if (matched) await this.showExtension(matched);
-    } catch { /* 静默失败 */ }
+    // 1. resolver 精确查（已通过 extension.open 打开过的插件）
+    const resolved = this._displayNameResolver?.(displayName);
+    if (resolved) {
+      await this.loadByExtensionId(resolved);
+      return;
+    }
+    // 2. 已安装插件精确匹配 displayName（从 packageJSON 获取 extensionId）
+    const dl = displayName.toLowerCase();
+    const installed = vscode.extensions.all.find((e) => {
+      const edl = ((e.packageJSON as { displayName?: string })?.displayName ?? '').toLowerCase();
+      return edl === dl;
+    });
+    if (installed) {
+      await this.loadByExtensionId(installed.id);
+    }
+    // 未安装且无映射：不加载（需先通过 extension.open 拦截获取 extensionId）
   }
 
   async showExtension(ext: ExtensionInfo) {
@@ -144,7 +189,9 @@ export class ReviewsSidebarProvider implements vscode.WebviewViewProvider {
     this._view.webview.postMessage({ type: 'reviewsLoading', append });
     try {
       const result = await getExtensionReviews(ext.publisherId, ext.extensionName, page, 20);
-      this._view.webview.postMessage({ type: 'reviews', ...result, page, append });
+      // 使用 API 返回的 hasMoreReviews，比条数判断更准确
+      const hasMore = result.hasMoreReviews ?? (result.reviews.length >= 20);
+      this._view.webview.postMessage({ type: 'reviews', ...result, page, append, hasMore });
     } catch (err) {
       this._view.webview.postMessage({ type: 'error', message: String(err), target: 'reviews' });
     }
@@ -317,7 +364,7 @@ export class ReviewsSidebarProvider implements vscode.WebviewViewProvider {
 
         case 'reviews':
           page = msg.page; total = msg.totalCount || 0;
-          renderReviews(msg.reviews, msg.append);
+          renderReviews(msg.reviews, msg.append, msg.hasMore);
           break;
 
         case 'searchLoading':
@@ -364,7 +411,7 @@ export class ReviewsSidebarProvider implements vscode.WebviewViewProvider {
       vscode.postMessage({ command: 'selectExt', ext });
     }
 
-    function renderReviews(reviews, append) {
+    function renderReviews(reviews, append, hasMore) {
       if (!reviews || reviews.length === 0) {
         if (!append) reviewsList.innerHTML = '<div class="placeholder">暂无评论</div>';
         loadMoreWrap.style.display = 'none';
@@ -390,12 +437,11 @@ export class ReviewsSidebarProvider implements vscode.WebviewViewProvider {
       }
 
       const loaded = page * pageSize;
-      const hasMore = total > loaded;
       loadMoreWrap.style.display = hasMore ? 'block' : 'none';
       if (hasMore) {
         loadMoreBtn.disabled = false;
         loadMoreBtn.textContent = 'Load more';
-        document.getElementById('load-more-info').textContent = loaded + ' / ' + total;
+        document.getElementById('load-more-info').textContent = loaded + ' loaded';
       }
     }
   </script>
