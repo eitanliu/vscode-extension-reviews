@@ -118,19 +118,21 @@ export class ReviewsSidebarProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  // 检测当前活跃 Tab 是否为扩展详情页，若是则加载评论
+  // 检测当前活跃 Tab 是否为扩展详情页，若是则按 displayName 加载
+  // VS Code 不向外部扩展暴露 ExtensionsInput（Tab.input 始终是 undefined），
+  // 所以无法从 Tab 直接拿到 extensionId，只能从 label 取 displayName
   private async _detectCurrentTab() {
     const activeTab = vscode.window.tabGroups.activeTabGroup?.activeTab;
-    if (activeTab?.label.startsWith('Extension: ')) {
-      const displayName = activeTab.label.slice('Extension: '.length);
-      this._currentExt = undefined;
-      await this.loadByDisplayName(displayName);
-    }
+    if (!activeTab?.label.startsWith('Extension: ')) return;
+    const displayName = activeTab.label.slice('Extension: '.length);
+    this._currentExt = undefined;
+    await this.loadByDisplayName(displayName);
   }
 
-  // 按 displayName 加载评论（供搜索框选中结果使用）
+  // 按 displayName 加载评论（供 Tab 切换 / 搜索框选中结果使用）
+  // 优先级：resolver 映射 → 已安装 packageJSON → Marketplace 精确 displayName 匹配
   async loadByDisplayName(displayName: string) {
-    // 1. resolver 精确查（已通过 extension.open 打开过的插件）
+    // 1. resolver 精确查（已通过 extension.open 或右键菜单打开过的插件）
     const resolved = this._displayNameResolver?.(displayName);
     if (resolved) {
       await this.loadByExtensionId(resolved);
@@ -144,8 +146,18 @@ export class ReviewsSidebarProvider implements vscode.WebviewViewProvider {
     });
     if (installed) {
       await this.loadByExtensionId(installed.id);
+      return;
     }
-    // 未安装且无映射：不加载（需先通过 extension.open 拦截获取 extensionId）
+    // 3. Marketplace 精确 displayName 匹配（fallback：仅在唯一精确匹配时使用）
+    //    避免 Continue → Pylance 的模糊匹配错误
+    try {
+      const result = await searchExtensions(displayName, 1, 50);
+      const exact = result.extensions.filter((e) => e.displayName === displayName);
+      if (exact.length === 1) {
+        await this.showExtension(exact[0]);
+      }
+      // 多匹配或零匹配：不加载，避免选错。用户可右键 → View Extension Reviews
+    } catch { /* 静默失败 */ }
   }
 
   async showExtension(ext: ExtensionInfo) {

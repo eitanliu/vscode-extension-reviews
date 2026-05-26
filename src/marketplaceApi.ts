@@ -61,7 +61,8 @@ export async function searchExtensions(
         ],
         pageNumber,
         pageSize,
-        sortBy: 4, // InstallCount
+        // 默认相关性排序（不指定 sortBy）。InstallCount 排序会让小众插件
+        // （如 "Cline Pro - CodeAI"）被热门插件挤出前几页，无法精确匹配 displayName
         sortOrder: 0,
       },
     ],
