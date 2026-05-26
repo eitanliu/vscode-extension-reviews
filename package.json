@@ -2,13 +2,33 @@
   "name": "extension-reviews",
   "displayName": "Extension Reviews",
   "description": "View ratings and reviews for VS Code extensions from the Marketplace",
-  "publisher": "local-dev",
+  "publisher": "eitanliu",
   "version": "0.0.3",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/eitanliu/vscode-extension-reviews.git"
+  },
+  "bugs": {
+    "url": "https://github.com/eitanliu/vscode-extension-reviews/issues"
+  },
+  "homepage": "https://github.com/eitanliu/vscode-extension-reviews#readme",
+  "keywords": [
+    "marketplace",
+    "reviews",
+    "ratings",
+    "extensions",
+    "feedback"
+  ],
   "engines": {
     "vscode": "^1.85.0"
   },
-  "categories": ["Other"],
-  "activationEvents": ["onStartupFinished"],
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "viewsContainers": {
@@ -31,16 +51,8 @@
     },
     "commands": [
       {
-        "command": "extensionReviews.runTest",
-        "title": "Extension Reviews: Run Test"
-      },
-      {
         "command": "extensionReviews.showForExtension",
         "title": "View Extension Reviews"
-      },
-      {
-        "command": "extensionReviews.debugSwitchToMarket",
-        "title": "Extension Reviews: Debug Switch to Market"
       }
     ],
     "menus": {

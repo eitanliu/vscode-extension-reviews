@@ -1,5 +1,14 @@
-node_modules/**
+.vscode/**
 .vscode-test/**
+node_modules/**
 src/**
+test/**
+docs/**
 .gitignore
+.vscodeignore
+.eslintrc*
 tsconfig.json
+tsconfig.test.json
+**/*.map
+**/.DS_Store
+*.vsix
