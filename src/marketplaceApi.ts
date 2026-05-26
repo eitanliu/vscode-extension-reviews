@@ -168,14 +168,23 @@ export async function getExtensionById(extensionId: string): Promise<ExtensionIn
   };
 }
 
+// Marketplace 评论 API 是基于日期的游标分页：
+// - 不传 beforeDate：返回最新的 N 条（按 updatedDate 倒序）
+// - 传 beforeDate：返回该日期之前的 N 条
+// 注意：API 不支持 skip/offset 参数（即使传了也会被忽略，永远返回最新 N 条）
 export async function getExtensionReviews(
   publisher: string,
   extensionName: string,
-  pageNumber: number = 1,
-  pageSize: number = 20
+  pageSize: number = 20,
+  beforeDate?: string
 ): Promise<ReviewsResult> {
-  const skip = (pageNumber - 1) * pageSize;
-  const path = `/_apis/public/gallery/publishers/${publisher}/extensions/${extensionName}/reviews?count=${pageSize}&filterOptions=0&skip=${skip}&api-version=7.1-preview.1`;
+  const params = new URLSearchParams({
+    count: String(pageSize),
+    filterOptions: '3',
+    'api-version': '7.1-preview.1',
+  });
+  if (beforeDate) params.set('beforeDate', beforeDate);
+  const path = `/_apis/public/gallery/publishers/${publisher}/extensions/${extensionName}/reviews?${params.toString()}`;
 
   const raw = await httpsGet(path, { Accept: 'application/json;api-version=7.1-preview.1' });
   const json = JSON.parse(raw);

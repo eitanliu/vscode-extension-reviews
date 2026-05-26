@@ -7,7 +7,8 @@ export class ReviewsSidebarProvider implements vscode.WebviewViewProvider {
   public static readonly viewId = 'extensionReviews.sidebar';
   private _view?: vscode.WebviewView;
   private _currentExt?: ExtensionInfo;
-  private _currentPage = 1;
+  private _lastReviewDate?: string; // 最后一条 review 的 updatedDate，作为下一页游标
+  private _loadedCount = 0; // 已加载的评论总数
   private _pendingExt?: ExtensionInfo;
   private _pendingExtensionId?: string; // 精确 extensionId，侧栏打开时加载
   private _displayNameResolver?: (displayName: string) => string | undefined;
@@ -77,7 +78,6 @@ export class ReviewsSidebarProvider implements vscode.WebviewViewProvider {
 
     webviewView.webview.onDidReceiveMessage(async (msg: {
       command: string;
-      page?: number;
       query?: string;
       ext?: ExtensionInfo;
     }) => {
@@ -98,14 +98,7 @@ export class ReviewsSidebarProvider implements vscode.WebviewViewProvider {
           break;
         case 'loadMore':
           if (this._currentExt) {
-            this._currentPage++;
-            await this._fetchAndPost(this._currentExt, this._currentPage, true);
-          }
-          break;
-        case 'loadPage':
-          if (this._currentExt && msg.page) {
-            this._currentPage = msg.page;
-            await this._fetchAndPost(this._currentExt, this._currentPage);
+            await this._fetchAndPost(this._currentExt, true);
           }
           break;
         case 'search':
@@ -166,11 +159,13 @@ export class ReviewsSidebarProvider implements vscode.WebviewViewProvider {
     if (this._currentExt && `${this._currentExt.publisherId}.${this._currentExt.extensionName}` === newId) return;
 
     this._currentExt = ext;
-    this._currentPage = 1;
+    // 重置分页游标和计数
+    this._lastReviewDate = undefined;
+    this._loadedCount = 0;
     if (this._view) {
       this._view.show(true);
       this._view.webview.postMessage({ type: 'showReviews', ext });
-      await this._fetchAndPost(ext, 1);
+      await this._fetchAndPost(ext);
     } else {
       this._pendingExt = ext;
       await vscode.commands.executeCommand(`${ReviewsSidebarProvider.viewId}.focus`);
@@ -196,14 +191,28 @@ export class ReviewsSidebarProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async _fetchAndPost(ext: ExtensionInfo, page: number, append = false) {
+  private async _fetchAndPost(ext: ExtensionInfo, append = false) {
     if (!this._view) return;
     this._view.webview.postMessage({ type: 'reviewsLoading', append });
     try {
-      const result = await getExtensionReviews(ext.publisherId, ext.extensionName, page, 20);
-      // 使用 API 返回的 hasMoreReviews，比条数判断更准确
+      // append=true 时用上次最后一条的 updatedDate 做游标；首次加载不传
+      const beforeDate = append ? this._lastReviewDate : undefined;
+      const result = await getExtensionReviews(ext.publisherId, ext.extensionName, 20, beforeDate);
+      // 更新游标和已加载计数
+      if (result.reviews.length > 0) {
+        this._lastReviewDate = result.reviews[result.reviews.length - 1].updatedDate;
+      }
+      this._loadedCount = append ? this._loadedCount + result.reviews.length : result.reviews.length;
+      // hasMoreReviews 是 API 返回的最准确信号
       const hasMore = result.hasMoreReviews ?? (result.reviews.length >= 20);
-      this._view.webview.postMessage({ type: 'reviews', ...result, page, append, hasMore });
+      this._view.webview.postMessage({
+        type: 'reviews',
+        reviews: result.reviews,
+        totalCount: result.totalCount,
+        loadedCount: this._loadedCount,
+        append,
+        hasMore,
+      });
     } catch (err) {
       this._view.webview.postMessage({ type: 'error', message: String(err), target: 'reviews' });
     }
@@ -313,7 +322,7 @@ export class ReviewsSidebarProvider implements vscode.WebviewViewProvider {
     const vscode = acquireVsCodeApi();
     // 通知扩展 WebView 已就绪，立即触发加载（无固定延迟）
     vscode.postMessage({ command: 'ready' });
-    let page = 1, total = 0, pageSize = 20;
+    // 分页由后端管理 cursor（基于 updatedDate），webview 不维护页码状态
 
     const searchInput = document.getElementById('search-input');
     const searchBtn = document.getElementById('search-btn');
@@ -375,8 +384,7 @@ export class ReviewsSidebarProvider implements vscode.WebviewViewProvider {
           break;
 
         case 'reviews':
-          page = msg.page; total = msg.totalCount || 0;
-          renderReviews(msg.reviews, msg.append, msg.hasMore);
+          renderReviews(msg.reviews, msg.append, msg.hasMore, msg.loadedCount, msg.totalCount);
           break;
 
         case 'searchLoading':
@@ -423,7 +431,7 @@ export class ReviewsSidebarProvider implements vscode.WebviewViewProvider {
       vscode.postMessage({ command: 'selectExt', ext });
     }
 
-    function renderReviews(reviews, append, hasMore) {
+    function renderReviews(reviews, append, hasMore, loadedCount, totalCount) {
       if (!reviews || reviews.length === 0) {
         if (!append) reviewsList.innerHTML = '<div class="placeholder">暂无评论</div>';
         loadMoreWrap.style.display = 'none';
@@ -448,12 +456,12 @@ export class ReviewsSidebarProvider implements vscode.WebviewViewProvider {
         reviewsList.innerHTML = html;
       }
 
-      const loaded = page * pageSize;
       loadMoreWrap.style.display = hasMore ? 'block' : 'none';
       if (hasMore) {
         loadMoreBtn.disabled = false;
         loadMoreBtn.textContent = 'Load more';
-        document.getElementById('load-more-info').textContent = loaded + ' loaded';
+        const info = totalCount ? \`\${loadedCount} / \${totalCount}\` : \`\${loadedCount} loaded\`;
+        document.getElementById('load-more-info').textContent = info;
       }
     }
   </script>
