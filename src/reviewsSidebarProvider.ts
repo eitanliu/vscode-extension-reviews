@@ -42,6 +42,12 @@ export class ReviewsSidebarProvider implements vscode.WebviewViewProvider {
             await this._detectCurrentTab();
           }
           break;
+        case 'loadMore':
+          if (this._currentExt) {
+            this._currentPage++;
+            await this._fetchAndPost(this._currentExt, this._currentPage, true);
+          }
+          break;
         case 'loadPage':
           if (this._currentExt && msg.page) {
             this._currentPage = msg.page;
@@ -133,12 +139,12 @@ export class ReviewsSidebarProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async _fetchAndPost(ext: ExtensionInfo, page: number) {
+  private async _fetchAndPost(ext: ExtensionInfo, page: number, append = false) {
     if (!this._view) return;
-    this._view.webview.postMessage({ type: 'reviewsLoading' });
+    this._view.webview.postMessage({ type: 'reviewsLoading', append });
     try {
       const result = await getExtensionReviews(ext.publisherId, ext.extensionName, page, 20);
-      this._view.webview.postMessage({ type: 'reviews', ...result, page });
+      this._view.webview.postMessage({ type: 'reviews', ...result, page, append });
     } catch (err) {
       this._view.webview.postMessage({ type: 'error', message: String(err), target: 'reviews' });
     }
@@ -204,12 +210,12 @@ export class ReviewsSidebarProvider implements vscode.WebviewViewProvider {
     .review-text { line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
     .helpful { margin-top: 3px; color: var(--secondary); font-size: 10px; }
 
-    /* 分页 */
-    #pagination { display: none; padding: 7px 10px; border-top: 1px solid var(--border); justify-content: space-between; align-items: center; flex-shrink: 0; }
-    .pg-btn { background: var(--btn-bg); color: var(--btn-fg); border: none; padding: 3px 8px; border-radius: 3px; cursor: pointer; font-size: 11px; }
-    .pg-btn:hover:not(:disabled) { background: var(--btn-hover); }
-    .pg-btn:disabled { opacity: 0.4; cursor: default; }
-    .pg-info { font-size: 11px; color: var(--secondary); }
+    /* 加载更多 */
+    #load-more-wrap { display: none; padding: 8px 10px; border-top: 1px solid var(--border); text-align: center; flex-shrink: 0; }
+    #load-more-btn { background: var(--btn-bg); color: var(--btn-fg); border: none; padding: 4px 16px; border-radius: 3px; cursor: pointer; font-size: 11px; width: 100%; }
+    #load-more-btn:hover:not(:disabled) { background: var(--btn-hover); }
+    #load-more-btn:disabled { opacity: 0.5; cursor: default; }
+    #load-more-info { font-size: 10px; color: var(--secondary); margin-top: 4px; }
 
     .placeholder { padding: 20px 10px; text-align: center; color: var(--secondary); line-height: 1.7; font-size: 12px; }
     .loading { padding: 14px; text-align: center; color: var(--secondary); }
@@ -239,10 +245,9 @@ export class ReviewsSidebarProvider implements vscode.WebviewViewProvider {
     </div>
   </div>
 
-  <div id="pagination">
-    <button class="pg-btn" id="btn-prev">上一页</button>
-    <span class="pg-info" id="pg-info"></span>
-    <button class="pg-btn" id="btn-next">下一页</button>
+  <div id="load-more-wrap">
+    <button id="load-more-btn">Load more</button>
+    <div id="load-more-info"></div>
   </div>
 
   <script>
@@ -256,17 +261,17 @@ export class ReviewsSidebarProvider implements vscode.WebviewViewProvider {
     const extHeader = document.getElementById('ext-header');
     const searchResults = document.getElementById('search-results');
     const reviewsList = document.getElementById('reviews-list');
-    const pagination = document.getElementById('pagination');
+    const loadMoreWrap = document.getElementById('load-more-wrap');
+    const loadMoreBtn = document.getElementById('load-more-btn');
     const backBtn = document.getElementById('back-btn');
 
     searchBtn.addEventListener('click', doSearch);
     searchInput.addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
     backBtn.addEventListener('click', showSearchView);
-    document.getElementById('btn-prev').addEventListener('click', () => {
-      if (page > 1) { page--; vscode.postMessage({ command: 'loadPage', page }); }
-    });
-    document.getElementById('btn-next').addEventListener('click', () => {
-      if (page < Math.ceil(total / pageSize)) { page++; vscode.postMessage({ command: 'loadPage', page }); }
+    loadMoreBtn.addEventListener('click', () => {
+      loadMoreBtn.disabled = true;
+      loadMoreBtn.textContent = 'Loading...';
+      vscode.postMessage({ command: 'loadMore' });
     });
 
     function doSearch() {
@@ -279,7 +284,7 @@ export class ReviewsSidebarProvider implements vscode.WebviewViewProvider {
       extHeader.style.display = 'none';
       searchResults.style.display = 'flex';
       reviewsList.style.display = 'none';
-      pagination.style.display = 'none';
+      loadMoreWrap.style.display = 'none';
     }
 
     function showReviewsView() {
@@ -303,16 +308,16 @@ export class ReviewsSidebarProvider implements vscode.WebviewViewProvider {
           document.getElementById('avg-rating').textContent = msg.ext.averageRating.toFixed(1);
           document.getElementById('rating-count').textContent = '(' + msg.ext.ratingCount + ')';
           reviewsList.innerHTML = '<div class="loading">加载评论中...</div>';
-          pagination.style.display = 'none';
+          loadMoreWrap.style.display = 'none';
           break;
 
         case 'reviewsLoading':
-          reviewsList.innerHTML = '<div class="loading">加载评论中...</div>';
+          if (!msg.append) reviewsList.innerHTML = '<div class="loading">加载评论中...</div>';
           break;
 
         case 'reviews':
           page = msg.page; total = msg.totalCount || 0;
-          renderReviews(msg.reviews);
+          renderReviews(msg.reviews, msg.append);
           break;
 
         case 'searchLoading':
@@ -320,7 +325,7 @@ export class ReviewsSidebarProvider implements vscode.WebviewViewProvider {
           searchResults.style.display = 'flex';
           reviewsList.style.display = 'none';
           extHeader.style.display = 'none';
-          pagination.style.display = 'none';
+          loadMoreWrap.style.display = 'none';
           break;
 
         case 'searchResults':
@@ -359,13 +364,13 @@ export class ReviewsSidebarProvider implements vscode.WebviewViewProvider {
       vscode.postMessage({ command: 'selectExt', ext });
     }
 
-    function renderReviews(reviews) {
+    function renderReviews(reviews, append) {
       if (!reviews || reviews.length === 0) {
-        reviewsList.innerHTML = '<div class="placeholder">暂无评论</div>';
-        pagination.style.display = 'none';
+        if (!append) reviewsList.innerHTML = '<div class="placeholder">暂无评论</div>';
+        loadMoreWrap.style.display = 'none';
         return;
       }
-      reviewsList.innerHTML = reviews.map(r => \`
+      const html = reviews.map(r => \`
         <div class="review">
           <div class="review-top">
             <span class="stars">\${stars(r.rating)}</span>
@@ -378,14 +383,19 @@ export class ReviewsSidebarProvider implements vscode.WebviewViewProvider {
         </div>
       \`).join('');
 
-      const totalPages = Math.ceil(total / pageSize);
-      if (totalPages > 1) {
-        pagination.style.display = 'flex';
-        document.getElementById('pg-info').textContent = page + ' / ' + totalPages;
-        document.getElementById('btn-prev').disabled = page <= 1;
-        document.getElementById('btn-next').disabled = page >= totalPages;
+      if (append) {
+        reviewsList.insertAdjacentHTML('beforeend', html);
       } else {
-        pagination.style.display = 'none';
+        reviewsList.innerHTML = html;
+      }
+
+      const loaded = page * pageSize;
+      const hasMore = total > loaded;
+      loadMoreWrap.style.display = hasMore ? 'block' : 'none';
+      if (hasMore) {
+        loadMoreBtn.disabled = false;
+        loadMoreBtn.textContent = 'Load more';
+        document.getElementById('load-more-info').textContent = loaded + ' / ' + total;
       }
     }
   </script>
